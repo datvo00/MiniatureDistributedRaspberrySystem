@@ -41,24 +41,19 @@ def HandleRead(filename):
 
 def HandleCommand(command):
     commands = command.split(" ", 1)
-    match commands[0]:
-        case "id":
-            HandleID()
-        case "store":
-            if (len(commands) > 1):
-                HandleStore(command[1])
-        case "delete":
-            if (len(command) > 1):
-                HandleDelete(command[1])
-        case "read":
-            if (len(command) > 1):
-                HandleRead(command[1])
-        case "mapreduce":
-            print("mapreduce")
-        case "output":
-            print("output")
-        case _:
-            print("undefined")
+    if commands[0] == "id":
+        HandleID()
+    elif commands[0] == "store" and len(commands) > 1:
+        HandleStore(command[1])      
+    elif commands[0] == "delete" and len(commands) > 1:
+        HandleDelete(command[1])       
+    elif commands[0] == "read" and len(commands) > 1:
+        HandleRead(command[1])       
+    elif commands[0] == "mapreduce":
+        print("mapreduce")
+    elif commands[0] == "output":
+        print("output")
+
 
 while True:
     if select.select([sys.stdin], [], [], 1)[0]:
