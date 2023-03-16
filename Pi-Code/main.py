@@ -1,10 +1,13 @@
-from comm import ConnectedDevices
+import tests
+import mapreduce
+
+from threading import Thread
 
 command = ""
 
-#while command != "exit":
-for i in range(0, 3):
-    connected_devices = ConnectedDevices()
-    print(i)
-    print(connected_devices)
-    print("")
+# while command != "exit":
+
+
+#tests.testMultipleThreads()
+
+tests.testMapReduce()
