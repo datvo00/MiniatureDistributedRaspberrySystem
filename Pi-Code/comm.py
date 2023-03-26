@@ -2,7 +2,7 @@ import glob
 import serial
 import select
 
-DEVICE_PATH_PI = "/dev/tty.usbmodem*"
+DEVICE_PATH_PI = "COM"
 
 def DeviceID(device):
     device_serial = serial.Serial(device, 9600)
