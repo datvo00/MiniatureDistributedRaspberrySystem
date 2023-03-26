@@ -77,7 +77,7 @@ class OLED_2inch23(framebuf.FrameBuffer):
         self.write_cmd(0xDA)  # --set com pins hardware configuration
         self.write_cmd(0x12)
         self.write_cmd(0xDB)  # set vcomh
-        self.write_cmd(0x08)  # Set VCOM Deselect Level
+        self.write_cmd(0x08)  # Set VCOM D  eselect Level
         self.write_cmd(0xAF);  # -Set Page Addressing Mode (0x00/0x01/0x02)
 
     def show(self):

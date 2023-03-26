@@ -1,8 +1,13 @@
 import glob
 import serial
 import select
+import threading
+import time
 
 DEVICE_PATH_PI = "COM"
+
+lock = threading.Lock()
+
 
 def DeviceID(device):
     device_serial = serial.Serial(device, 9600)
@@ -22,12 +27,36 @@ def DeviceID(device):
 
 
 def ConnectedDevices():
-    device_list = {}
-    devices_path = glob.glob(DEVICE_PATH_PI)
-    for device in devices_path:
-        print(device)
-        device_id = DeviceID(device)
-        if len(device_id) > 0:
-            device_list[device_id] = device
+    with lock:
+        device_list = {}
+        devices_path = glob.glob(DEVICE_PATH_PI)
+        for device in devices_path:
+            #print(device)
+            device_id = DeviceID(device)
+            if len(device_id) > 0:
+                device_list[device_id] = device
     return device_list
-    
+
+
+def SendMessage(device, function, msg):
+    message = function + " " + msg + "\n"
+    device_serial = serial.Serial(device, 9600)
+    poll = select.poll()
+    poll.register(device_serial, select.POLLIN)
+    comm_attempt = 1
+    while comm_attempt <= 3:
+        device_serial.write(message.encode()) # makes id request
+        events = poll.poll(500) # waits 0.5 second for response
+        for fd, status in events:
+            if status & select.POLLIN:
+                response = device_serial.read_all()
+                response = response.decode("utf-8", "ignore")
+                return response
+        comm_attempt = comm_attempt + 1
+    return ""
+
+
+def GetConnectedDevices():
+    with lock:
+        devices = glob.glob(DEVICE_PATH_PI)
+    return devices
