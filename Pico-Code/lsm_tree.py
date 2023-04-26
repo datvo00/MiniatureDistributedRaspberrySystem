@@ -1,4 +1,3 @@
-from avl_tree import AVLTree
 from bloom_filter import BloomFilter
 from write_ahead_log import WriteAheadLog
 from red_black_tree import RedBlackTree
@@ -14,7 +13,7 @@ import gc
 class LSMTree:
     def __init__(self, table_size):
         self.memtable = RedBlackTree()
-        self.memtable_size = table_size
+        self.max_memtable_size = table_size
         self.bloomfilter = BloomFilter(table_size)
         self.writeaheadlog = WriteAheadLog("write_ahead_log.txt")
 
@@ -35,29 +34,38 @@ class LSMTree:
 
         self.level_multipler = 2
 
+        self.tombstone = "tomb"
+
     def store(self, key, value):
         """ (self, str, str) -> None
         Stores a file (key) and the contents (value)
         """
         filename = str(time.time_ns())
         self.lock.acquire()
-        self.writeaheadlog.write(f"{key} {filename}")
+        self.writeaheadlog.write(f"store {key} {filename}")
+        self.lock.release()
         # key is in memtable, just replace
         if self.bloomfilter.contains(key):
             node = self.memtable.search(key)
             old_node_value = node.value
             node.value = filename
+            self.lock.acquire()
             self.write_value_to_disk(f"/data/{key}/{filename}", value)
-            uos.remove(f"/data/{key}/{old_node_value}")
+            if old_node_value != self.tombstone:
+                uos.remove(f"/data/{key}/{old_node_value}")
+            self.lock.release()
         else:
+            self.lock.acquire()
             try:
                 uos.mkdir(f"/data/{key}")
             except OSError:
                 pass
             self.write_value_to_disk(f"/data/{key}/{filename}", value)
+            self.lock.release()
             self.memtable.insert(key, filename)
             self.bloomfilter.insert(key)
-        if self.memtable.size >= self.memtable_size:
+        self.lock.acquire()
+        if self.memtable.size >= self.max_memtable_size:
             self.flush_memtable_to_disk()
         self.lock.release()
 
@@ -66,18 +74,21 @@ class LSMTree:
         Checks in memory for the key. If it exists, return the value.
         If the key doesn't exist in memory, then the disk will be searched.
         """
-        self.lock.acquire()
         # check if in memory
         if self.bloomfilter.contains(key):
             node = self.memtable.search(key)
             if not node:
-                self.lock.release()
                 return
+            self.lock.acquire()
+            if node.value == self.tombstone:
+                self.lock.release()
+                return None
             with open(f"/data/{key}/{node.value}", "r") as file:
                 self.lock.release()
                 return file.read()
 
         # check disk
+        self.lock.acquire()
         sstable_level = self.sstable_level
         for level in range(sstable_level + 1):
             dirs = uos.listdir(f"/sstables/{level}")
@@ -100,18 +111,37 @@ class LSMTree:
                         k, v = line.split(" ", 1)
                         if k == key:
                             v = v[:-1]
+                            if v == self.tombstone:
+                                self.lock.release()
+                                return None
                             with open(f"/data/{key}/{v}", "r") as f:
                                 self.lock.release()
                                 return f.read()
                         line = file.readline()
         self.lock.release()
 
-    """
-    Need to implement 
-    """
-
     def delete(self, key):
-        return
+        """
+        Checks if key is in memory if so, then replace the value with tomb
+        otherwise, we can just add tomb to memory.
+        """
+        self.lock.acquire()
+        self.writeaheadlog.write(f"delete {key} tomb")
+        self.lock.release()
+        if self.bloomfilter.contains(key):
+            node = self.memtable.search(key)
+            old_node_value = node.value
+            node.value = self.tombstone
+            self.lock.acquire()
+            uos.remove(f"/data/{key}/{old_node_value}")
+            self.lock.release()
+            return
+        self.memtable.insert(key, self.tombstone)
+        self.bloomfilter.insert(key)
+        self.lock.acquire()
+        if self.memtable.size >= self.max_memtable_size:
+            self.flush_memtable_to_disk()
+        self.lock.release()
 
     def restore_memtable(self):
         """
@@ -119,13 +149,21 @@ class LSMTree:
         """
         data = self.writeaheadlog.read()
         for line in data.splitlines():
-            key, value = line.split(" ")
-            if self.bloomfilter.contains(key):
-                node = self.memtable.search(key)
-                node.value = value
-            else:
-                self.memtable.insert(key, value)
-                self.bloomfilter.insert(key)
+            function, key, value = line.split(" ")
+            if function == "store":
+                if self.bloomfilter.contains(key):
+                    node = self.memtable.search(key)
+                    node.value = value
+                else:
+                    self.memtable.insert(key, value)
+                    self.bloomfilter.insert(key)
+            elif function == "delete":
+                if self.bloomfilter.contains(key):
+                    node = self.memtable.search(key)
+                    node.value = value
+                else:
+                    self.memtable.insert(key, value)
+                    self.bloomfilter.insert(key)
 
     def restore_metadata(self):
         with open("metadata.txt", "r") as file:
@@ -141,7 +179,7 @@ class LSMTree:
         with open("metadata.txt", "w") as file:
             file.write(f"sstable_level {self.sstable_level}\n")
 
-    def write_value_to_disk(filename, value):
+    def write_value_to_disk(self, filename, value):
         with open(filename, "w") as file:
             file.write(value)
 
@@ -215,25 +253,30 @@ class LSMTree:
                     while line1 and line2:
                         key1, key2 = line1.split(" ")[0], line2.split(" ")[0]
                         if key1 == key2:
-                            new_file.write(line2)
+                            if line2.split(" ")[1] != self.tombstone:
+                                new_file.write(line2)
                             value = line1.split(" ")[1]
                             value = value[:-1]
                             uos.remove(f"/data/{key1}/{value}")
                             line1 = file1.readline()
                             line2 = file2.readline()
                         elif key1 < key2:
-                            new_file.write(line1)
+                            if line1.split(" ")[1] != self.tombstone:
+                                new_file.write(line1)
                             line1 = file1.readline()
                         else:
-                            new_file.write(line2)
+                            if line2.split(" ")[1] != self.tombstone:
+                                new_file.write(line2)
                             line2 = file2.readline()
 
                     # write what's left in each file
                     while line1:
-                        new_file.write(line1)
+                        if line1.split(" ")[1] != self.tombstone:
+                            new_file.write(line1)
                         line1 = file1.readline()
                     while line2:
-                        new_file.write(line2)
+                        if line2.split(" ")[1] != self.tombstone:
+                            new_file.write(line2)
                         line2 = file2.readline()
 
         new_min = min(min1, min2)
@@ -305,3 +348,4 @@ class LSMTree:
             self.remove_dir("/data")
         except:
             pass
+

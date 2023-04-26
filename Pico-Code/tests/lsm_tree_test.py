@@ -47,6 +47,11 @@ def test3():
     for i in range(50):
         data = tree.retrieve(str(i))
         assert data == str(i)
+    for i in range(50):
+        tree.delete(str(i))
+    for i in range(50):
+        data = tree.retrieve(str(i))
+        assert data == None
     print("test3 finished")
 
 
@@ -57,4 +62,5 @@ Simple tests
 test1()
 test2()
 test3()
+
 
