@@ -1,6 +1,7 @@
 from machine import Pin, SPI
 import framebuf
 import time
+import uos
 
 DC = 8
 RST = 12
@@ -90,9 +91,29 @@ class OLED_2inch23(framebuf.FrameBuffer):
                 self.write_data(self.buffer[page * 128 + num])
 
 
-def display(dataStr):
-    OLED = OLED_2inch23()
-    OLED.text(dataStr, 1, 2, OLED.white)
+OLED = OLED_2inch23()
+
+def display(second_core_busy, os_stats):
+    display_map = {}
+    if second_core_busy:
+        display_map["core1"] = "Core1:Merging"
+    else:
+        display_map["core1"] = "Core1:Idle"
+    display_map["Storage Usage"] = f"Usage:{((os_stats[0] * os_stats[2]) - (os_stats[0] * os_stats[3])) / 1000}KB"
+    display_map["Storage Remaining"] = f"Free:{(os_stats[0] * os_stats[3]) / 1000}KB"
+
+    OLED.fill(0x0000)
+    OLED.text(display_map["core1"], 0, 0, OLED.white)
+    OLED.line(0, 8, 128, 8, OLED.white)
+    OLED.text(display_map["Storage Usage"], 0, 12, OLED.white)
+    OLED.line(0, 20, 128, 20, OLED.white)
+    OLED.text(display_map["Storage Remaining"], 0, 24, OLED.white)
+
     OLED.show()
+
+
+
+
+
 
 

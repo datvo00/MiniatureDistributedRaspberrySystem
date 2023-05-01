@@ -1,6 +1,7 @@
 from bloom_filter import BloomFilter
 from write_ahead_log import WriteAheadLog
 from red_black_tree import RedBlackTree
+from display import display
 import time
 import utime
 import uos
@@ -15,10 +16,11 @@ class LSMTree:
         self.memtable = RedBlackTree()
         self.max_memtable_size = table_size
         self.bloomfilter = BloomFilter(table_size)
-        self.writeaheadlog = WriteAheadLog("write_ahead_log.txt")
+        self.writeaheadlog = WriteAheadLog("write_ahead_log")
 
         # multithreading
         self.lock = _thread.allocate_lock()
+        self.second_core_busy = False
 
         # store in metadata
         self.sstable_level = 0
@@ -30,11 +32,15 @@ class LSMTree:
         self.lock.acquire()
         self.restore_memtable()
         self.restore_metadata()
+        self.restore_merge()
+        display(self.second_core_busy, uos.statvfs("/"))
         self.lock.release()
 
         self.level_multipler = 2
 
         self.tombstone = "tomb"
+
+        self.merge_status = {}
 
     def store(self, key, value):
         """ (self, str, str) -> None
@@ -42,7 +48,7 @@ class LSMTree:
         """
         filename = str(time.time_ns())
         self.lock.acquire()
-        self.writeaheadlog.write(f"store {key} {filename}")
+        self.writeaheadlog.write(f"{key} {filename}")
         self.lock.release()
         # key is in memtable, just replace
         if self.bloomfilter.contains(key):
@@ -67,6 +73,7 @@ class LSMTree:
         self.lock.acquire()
         if self.memtable.size >= self.max_memtable_size:
             self.flush_memtable_to_disk()
+        display(self.second_core_busy, uos.statvfs("/"))
         self.lock.release()
 
     def retrieve(self, key):
@@ -84,6 +91,7 @@ class LSMTree:
                 self.lock.release()
                 return None
             with open(f"/data/{key}/{node.value}", "r") as file:
+                display(self.second_core_busy, uos.statvfs("/"))
                 self.lock.release()
                 return file.read()
 
@@ -115,9 +123,11 @@ class LSMTree:
                                 self.lock.release()
                                 return None
                             with open(f"/data/{key}/{v}", "r") as f:
+                                display(self.second_core_busy, uos.statvfs("/"))
                                 self.lock.release()
                                 return f.read()
                         line = file.readline()
+        display(self.second_core_busy, uos.statvfs("/"))
         self.lock.release()
 
     def delete(self, key):
@@ -126,7 +136,7 @@ class LSMTree:
         otherwise, we can just add tomb to memory.
         """
         self.lock.acquire()
-        self.writeaheadlog.write(f"delete {key} tomb")
+        self.writeaheadlog.write(f"{key} tomb")
         self.lock.release()
         if self.bloomfilter.contains(key):
             node = self.memtable.search(key)
@@ -134,6 +144,7 @@ class LSMTree:
             node.value = self.tombstone
             self.lock.acquire()
             uos.remove(f"/data/{key}/{old_node_value}")
+            display(self.second_core_busy, uos.statvfs("/"))
             self.lock.release()
             return
         self.memtable.insert(key, self.tombstone)
@@ -141,6 +152,7 @@ class LSMTree:
         self.lock.acquire()
         if self.memtable.size >= self.max_memtable_size:
             self.flush_memtable_to_disk()
+        display(self.second_core_busy, uos.statvfs("/"))
         self.lock.release()
 
     def restore_memtable(self):
@@ -149,24 +161,16 @@ class LSMTree:
         """
         data = self.writeaheadlog.read()
         for line in data.splitlines():
-            function, key, value = line.split(" ")
-            if function == "store":
-                if self.bloomfilter.contains(key):
-                    node = self.memtable.search(key)
-                    node.value = value
-                else:
-                    self.memtable.insert(key, value)
-                    self.bloomfilter.insert(key)
-            elif function == "delete":
-                if self.bloomfilter.contains(key):
-                    node = self.memtable.search(key)
-                    node.value = value
-                else:
-                    self.memtable.insert(key, value)
-                    self.bloomfilter.insert(key)
+            key, value = line.split(" ")
+            if self.bloomfilter.contains(key):
+                node = self.memtable.search(key)
+                node.value = value
+            else:
+                self.memtable.insert(key, value)
+                self.bloomfilter.insert(key)
 
     def restore_metadata(self):
-        with open("metadata.txt", "r") as file:
+        with open("metadata", "r") as file:
             line = file.readline()
             while line:
                 key, value = line.split(" ", 1)
@@ -176,7 +180,7 @@ class LSMTree:
                 line = file.readline()
 
     def store_metadata(self):
-        with open("metadata.txt", "w") as file:
+        with open("metadata", "w") as file:
             file.write(f"sstable_level {self.sstable_level}\n")
 
     def write_value_to_disk(self, filename, value):
@@ -194,7 +198,12 @@ class LSMTree:
         except:
             pass
         try:
-            with open("metadata.txt", "x"):
+            with open("metadata", "x"):
+                pass
+        except:
+            pass
+        try:
+            with open("merge_log", "x"):
                 pass
         except:
             pass
@@ -219,21 +228,31 @@ class LSMTree:
 
         self.store_metadata()
         self.writeaheadlog.clear()
-        self.writeaheadlog = WriteAheadLog("write_ahead_log.txt")
+        self.writeaheadlog = WriteAheadLog("write_ahead_log")
         self.memtable.clear()
         self.bloomfilter.clear()
 
     def merge_two_tables(self, table1, table2, level):
-        '''(self, str, str (newer table), int
+        """(self, str, str (newer table), int
         Merges table1 and table2 into a new table.
         Creates a new level if at bottom of tree.
-        '''
+        """
+        self.second_core_busy = True
+
+        display(self.second_core_busy, uos.statvfs("/"))
+
         new_level = level + 1
         try:
             uos.mkdir(f"/sstables/{new_level}")
         except:
             pass
         new_path = f"/sstables/{new_level}/{time.time_ns()}_{utime.ticks_ms()}"
+
+        self.sstable_level = max(self.sstable_level, new_level)
+        self.store_metadata()
+
+        self.merge_status[new_path] = {"merge": True, "delete0": table1, "delete1": table2, "level": new_level}
+        self.write_merge()
 
         with open(new_path, "w") as new_file:
             with open(table1, "r") as file1:
@@ -297,11 +316,20 @@ class LSMTree:
             new_file.write(f"{new_bloomfilter.element_count} {str(list(bitarray))}\n")
             new_file.write("".join(merged_data))
 
-        uos.remove(table1)
-        uos.remove(table2)
+        self.merge_status[new_path] = {"merge": False, "delete0": table1, "delete1": table2, "level": new_level}
+        self.write_merge()
 
-        self.sstable_level = max(self.sstable_level, new_level)
-        self.store_metadata()
+        uos.remove(table1)
+        self.merge_status[new_path] = {"merge": False, "delete0": None, "delete1": table2, "level": new_level}
+        self.write_merge()
+
+        uos.remove(table2)
+        self.merge_status = {}
+        self.write_merge()
+
+        self.second_core_busy = False
+
+        display(self.second_core_busy, uos.statvfs("/"))
 
     def merge(self):
         """
@@ -316,6 +344,43 @@ class LSMTree:
                 dirs.sort()
                 self.merge_two_tables(f"/sstables/{index}/{dirs[0]}", f"/sstables/{index}/{dirs[1]}", index)
         self.lock.release()
+
+    def write_merge(self):
+        with open("merge_log", "w") as file:
+            file.write(ujson.dumps(self.merge_status))
+
+    def restore_merge(self):
+        with open("merge_log", "r") as file:
+            file_content = file.read()
+            if len(file_content) == 0:
+                return
+            merge_status = ujson.loads(file_content)
+            if len(merge_status) == 0:
+                return
+            filename = list(merge_status)[0]
+
+            value = merge_status[filename]["merge"]
+            level = merge_status[filename]["level"]
+
+            if value == True:
+                uos.remove(filename)
+                with open("merge_log", "w") as file:
+                    pass
+                return
+
+            level = level - 1
+
+            value = merge_status[filename]["delete0"]
+            if value is not None:
+                uos.remove(value)
+
+            value = merge_status[filename]["delete1"]
+            if value is not None:
+                uos.remove(value)
+
+        # clear the file
+        with open("merge_log", "w") as file:
+            pass
 
     def remove_dir(self, path):
         """
@@ -333,11 +398,11 @@ class LSMTree:
 
     def clear_tree(self):
         try:
-            uos.remove("metadata.txt")
+            uos.remove("metadata")
         except:
             pass
         try:
-            uos.remove("write_ahead_log.txt")
+            uos.remove("write_ahead_log")
         except:
             pass
         try:
