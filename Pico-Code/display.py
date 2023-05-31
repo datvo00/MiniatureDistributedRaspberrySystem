@@ -93,13 +93,11 @@ class OLED_2inch23(framebuf.FrameBuffer):
 
 OLED = OLED_2inch23()
 
-def display(second_core_busy, os_stats):
+
+def display(task, os_stats):
     display_map = {}
-    if second_core_busy:
-        display_map["core1"] = "Core1:Merging"
-    else:
-        display_map["core1"] = "Core1:Idle"
-    display_map["Storage Usage"] = f"Usage:{((os_stats[0] * os_stats[2]) - (os_stats[0] * os_stats[3])) / 1000}KB"
+    display_map["core1"] = f"Task:{task}"
+    display_map["Storage Usage"] = f"Used:{((os_stats[0] * os_stats[2]) - (os_stats[0] * os_stats[3])) / 1000}KB"
     display_map["Storage Remaining"] = f"Free:{(os_stats[0] * os_stats[3]) / 1000}KB"
 
     OLED.fill(0x0000)
@@ -111,9 +109,8 @@ def display(second_core_busy, os_stats):
 
     OLED.show()
 
-
-
-
-
-
+# def display(message):
+#     OLED.fill(0x0000)
+#     OLED.text(message, 0, 0, OLED.white)
+#     OLED.show()
 

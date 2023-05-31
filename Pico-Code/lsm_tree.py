@@ -20,7 +20,6 @@ class LSMTree:
 
         # multithreading
         self.lock = _thread.allocate_lock()
-        self.second_core_busy = False
 
         # store in metadata
         self.sstable_level = 0
@@ -33,7 +32,7 @@ class LSMTree:
         self.restore_memtable()
         self.restore_metadata()
         self.restore_merge()
-        display(self.second_core_busy, uos.statvfs("/"))
+        display("Idle", uos.statvfs("/"))
         self.lock.release()
 
         self.level_multipler = 2
@@ -48,6 +47,7 @@ class LSMTree:
         """
         filename = str(time.time_ns())
         self.lock.acquire()
+        display("Storing", uos.statvfs("/"))
         self.writeaheadlog.write(f"{key} {filename}")
         self.lock.release()
         # key is in memtable, just replace
@@ -57,8 +57,11 @@ class LSMTree:
             node.value = filename
             self.lock.acquire()
             self.write_value_to_disk(f"/data/{key}/{filename}", value)
-            if old_node_value != self.tombstone:
-                uos.remove(f"/data/{key}/{old_node_value}")
+            try:
+                if old_node_value != self.tombstone:
+                    uos.remove(f"/data/{key}/{old_node_value}")
+            except:
+                pass
             self.lock.release()
         else:
             self.lock.acquire()
@@ -73,7 +76,7 @@ class LSMTree:
         self.lock.acquire()
         if self.memtable.size >= self.max_memtable_size:
             self.flush_memtable_to_disk()
-        display(self.second_core_busy, uos.statvfs("/"))
+        display("Idle", uos.statvfs("/"))
         self.lock.release()
 
     def retrieve(self, key):
@@ -82,16 +85,20 @@ class LSMTree:
         If the key doesn't exist in memory, then the disk will be searched.
         """
         # check if in memory
+        self.lock.acquire()
+        display("Retrieving", uos.statvfs("/"))
+        self.lock.release()
         if self.bloomfilter.contains(key):
             node = self.memtable.search(key)
             if not node:
                 return
             self.lock.acquire()
             if node.value == self.tombstone:
+                display("Idle", uos.statvfs("/"))
                 self.lock.release()
                 return None
             with open(f"/data/{key}/{node.value}", "r") as file:
-                display(self.second_core_busy, uos.statvfs("/"))
+                display("Idle", uos.statvfs("/"))
                 self.lock.release()
                 return file.read()
 
@@ -123,11 +130,11 @@ class LSMTree:
                                 self.lock.release()
                                 return None
                             with open(f"/data/{key}/{v}", "r") as f:
-                                display(self.second_core_busy, uos.statvfs("/"))
+                                display("Idle", uos.statvfs("/"))
                                 self.lock.release()
                                 return f.read()
                         line = file.readline()
-        display(self.second_core_busy, uos.statvfs("/"))
+        display("Idle", uos.statvfs("/"))
         self.lock.release()
 
     def delete(self, key):
@@ -136,6 +143,7 @@ class LSMTree:
         otherwise, we can just add tomb to memory.
         """
         self.lock.acquire()
+        display("Deleting", uos.statvfs("/"))
         self.writeaheadlog.write(f"{key} tomb")
         self.lock.release()
         if self.bloomfilter.contains(key):
@@ -144,7 +152,7 @@ class LSMTree:
             node.value = self.tombstone
             self.lock.acquire()
             uos.remove(f"/data/{key}/{old_node_value}")
-            display(self.second_core_busy, uos.statvfs("/"))
+            display("Idle", uos.statvfs("/"))
             self.lock.release()
             return
         self.memtable.insert(key, self.tombstone)
@@ -152,7 +160,7 @@ class LSMTree:
         self.lock.acquire()
         if self.memtable.size >= self.max_memtable_size:
             self.flush_memtable_to_disk()
-        display(self.second_core_busy, uos.statvfs("/"))
+        display("Idle", uos.statvfs("/"))
         self.lock.release()
 
     def restore_memtable(self):
@@ -237,9 +245,7 @@ class LSMTree:
         Merges table1 and table2 into a new table.
         Creates a new level if at bottom of tree.
         """
-        self.second_core_busy = True
-
-        display(self.second_core_busy, uos.statvfs("/"))
+        display("Merging", uos.statvfs("/"))
 
         new_level = level + 1
         try:
@@ -276,7 +282,10 @@ class LSMTree:
                                 new_file.write(line2)
                             value = line1.split(" ")[1]
                             value = value[:-1]
-                            uos.remove(f"/data/{key1}/{value}")
+                            try:
+                                uos.remove(f"/data/{key1}/{value}")
+                            except:
+                                pass
                             line1 = file1.readline()
                             line2 = file2.readline()
                         elif key1 < key2:
@@ -327,9 +336,7 @@ class LSMTree:
         self.merge_status = {}
         self.write_merge()
 
-        self.second_core_busy = False
-
-        display(self.second_core_busy, uos.statvfs("/"))
+        display("Idle", uos.statvfs("/"))
 
     def merge(self):
         """
@@ -339,10 +346,13 @@ class LSMTree:
         for index in range(self.sstable_level + 1):
             max_num = self.level_multipler ** index
             dirs = []
-            dirs = uos.listdir(f"/sstables/{index}")
-            if len(dirs) > max_num:
-                dirs.sort()
-                self.merge_two_tables(f"/sstables/{index}/{dirs[0]}", f"/sstables/{index}/{dirs[1]}", index)
+            try:
+                dirs = uos.listdir(f"/sstables/{index}")
+                if len(dirs) > max_num:
+                    dirs.sort()
+                    self.merge_two_tables(f"/sstables/{index}/{dirs[0]}", f"/sstables/{index}/{dirs[1]}", index)
+            except:
+                pass
         self.lock.release()
 
     def write_merge(self):
@@ -413,4 +423,5 @@ class LSMTree:
             self.remove_dir("/data")
         except:
             pass
+
 

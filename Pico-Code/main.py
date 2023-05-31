@@ -1,13 +1,21 @@
 import select
 import sys
 import _thread
+import machine
 
 import uos
+import os
 
 from display import display
 from lsm_tree import LSMTree
 
 tree = LSMTree(4)
+
+
+def HandleID():
+    serial_id = machine.unique_id()
+    serial_id = "".join("%02x" % b for b in serial_id)
+    print(serial_id)
 
 
 def HandleStore(data):
@@ -35,7 +43,29 @@ def HandleCommand(command):
     elif commands[0] == "retrieve":
         HandleRetrieve(commands[1])
     elif commands[0] == "delete":
-        HandleRetrieve(commands[1])
+        HandleDelete(commands[1])
+    elif commands[0] == "id":
+        HandleID()
+    elif commands[0] == "clear":
+        tree.lock.acquire()
+        delete_except_py(".")
+        tree.lock.release()
+
+
+def delete_except_py(path='.'):
+    try:
+        for file in os.listdir(path):
+            file_path = path + '/' + file
+            stat = os.stat(file_path)
+
+            if stat[0] & 0x4000:
+                delete_except_py(file_path)
+                os.rmdir(file_path)
+            else:
+                if not file.endswith('.py'):
+                    os.remove(file_path)
+    except OSError:
+        pass
 
 
 def HandleSecondThread():
@@ -44,13 +74,15 @@ def HandleSecondThread():
         tree.merge()
 
 
-display(False, uos.statvfs("/"))
+display("Idle", uos.statvfs("/"))
 
 _thread.start_new_thread(HandleSecondThread, ())
 
+poll_object = select.poll()
+poll_object.register(sys.stdin, select.POLLIN)
 
 while True:
-    if select.select([sys.stdin], [], [], 1)[0]:
+    if poll_object.poll():
         command = sys.stdin.readline()
         command = command[:-1]
         HandleCommand(command)
